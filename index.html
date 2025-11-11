@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Tic Tac Toe</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for sound effects -->
+    <script src="https://unpkg.com/tone@14.7.58/build/Tone.js"></script>
+    <!-- Load Firebase/Firestore for compliance, though state is managed locally for this simple game. -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, query, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables must be defined here to be accessible in the main script block
+        window.app = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.isAuthReady = false;
+
+        setLogLevel('debug');
+
+        // Check for global variables and initialize Firebase
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfigString = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+        const firebaseConfig = JSON.parse(firebaseConfigString);
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        if (Object.keys(firebaseConfig).length > 0) {
+            try {
+                window.app = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.app);
+                window.auth = getAuth(window.app);
+
+                // Authentication State Listener
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        console.log("Firebase Auth Ready. User ID:", window.userId);
+                    } else {
+                        // If no user, userId will be null, but we proceed with anon if no token
+                    }
+                    window.isAuthReady = true;
+
+                    // Note: No Firestore operations are necessary for this single-player game,
+                    // but the setup ensures compliance with the mandatory Firestore rule.
+
+                    // Trigger game setup if it was waiting for auth
+                    if (window.onFirebaseReady) {
+                        window.onFirebaseReady();
+                    }
+                });
+
+                // Sign in logic
+                if (initialAuthToken) {
+                    signInWithCustomToken(window.auth, initialAuthToken)
+                        .catch((error) => {
+                            console.error("Custom token sign-in failed:", error);
+                            signInAnonymously(window.auth).catch(e => console.error("Anonymous sign-in failed:", e));
+                        });
+                } else {
+                    signInAnonymously(window.auth).catch(e => console.error("Anonymous sign-in failed:", e));
+                }
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        } else {
+            // Fallback for environments without Firebase config
+            window.isAuthReady = true;
+            window.userId = 'unauthenticated-' + crypto.randomUUID();
+            if (window.onFirebaseReady) {
+                window.onFirebaseReady();
+            }
+        }
+    </script>
+
+    <style>
+        /* Define Inter font and dark mode transition */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        /* Base colors for light mode */
+        :root {
+            --bg-color: #f8fafc; /* slate-50 */
+            --text-color: #1e293b; /* slate-800 */
+            --primary-color: #0d9488; /* teal-600 */
+            --secondary-color: #7c3aed; /* violet-600 */
+            --cell-bg: #e2e8f0; /* slate-200 */
+            --hover-bg: #cbd5e1; /* slate-300 */
+            --win-bg: #4ade80; /* green-400 */
+            --shadow-color: rgba(124, 58, 237, 0.4);
+        }
+
+        /* Dark mode overrides */
+        .dark {
+            --bg-color: #1f2937; /* gray-800 */
+            --text-color: #f1f5f9; /* slate-100 */
+            --primary-color: #2dd4bf; /* teal-400 */
+            --secondary-color: #a78bfa; /* violet-400 */
+            --cell-bg: #374151; /* gray-700 */
+            --hover-bg: #4b5563; /* gray-600 */
+            --win-bg: #86efac; /* green-300 */
+            --shadow-color: rgba(167, 139, 250, 0.3);
+        }
+
+        .container-wrapper {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .board {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            width: 100%;
+            max-width: 450px;
+            aspect-ratio: 1 / 1;
+            box-shadow: 0 10px 25px -3px var(--shadow-color);
+        }
+
+        .cell {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 4rem; /* 64px */
+            cursor: pointer;
+            border: 4px solid var(--text-color);
+            background-color: var(--cell-bg);
+            transition: background-color 0.2s ease-out, transform 0.1s;
+        }
+
+        .cell:hover:not(.x, .o, .win) {
+            background-color: var(--hover-bg);
+        }
+
+        .cell.win {
+            background-color: var(--win-bg);
+            animation: win-pulse 1s infinite alternate;
+            color: var(--text-color);
+        }
+
+        @keyframes win-pulse {
+            from { opacity: 1; transform: scale(1); }
+            to { opacity: 0.8; transform: scale(1.05); }
+        }
+
+        .cell:first-child { border-top-left-radius: 1rem; }
+        .cell:nth-child(3) { border-top-right-radius: 1rem; }
+        .cell:nth-child(7) { border-bottom-left-radius: 1rem; }
+        .cell:last-child { border-bottom-right-radius: 1rem; }
+
+        /* Remove specific border lines for the grid */
+        .cell:nth-child(1), .cell:nth-child(2), .cell:nth-child(3) { border-top: none; }
+        .cell:nth-child(7), .cell:nth-child(8), .cell:nth-child(9) { border-bottom: none; }
+        .cell:nth-child(3n + 1) { border-left: none; }
+        .cell:nth-child(3n) { border-right: none; }
+
+        /* X and O styles (using colors defined in JS via inline style for animation) */
+        .x {
+            color: var(--primary-color);
+            text-shadow: 0 0 10px rgba(13, 148, 136, 0.6);
+        }
+        .o {
+            color: var(--secondary-color);
+            text-shadow: 0 0 10px rgba(124, 58, 237, 0.6);
+        }
+
+        /* Animation for placed symbol */
+        .cell > div {
+            transform: scale(0.5);
+            opacity: 0;
+            animation: pop-in 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards;
+        }
+
+        @keyframes pop-in {
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        /* Turn indicator animation */
+        .turn-indicator {
+            padding: 0.5rem 1rem;
+            border-radius: 9999px; /* full rounded */
+            font-weight: 700;
+            min-width: 120px;
+            text-align: center;
+            animation: glow-pulse 1.5s infinite alternate;
+        }
+
+        @keyframes glow-pulse {
+            from { box-shadow: 0 0 8px var(--primary-color); }
+            to { box-shadow: 0 0 16px var(--primary-color); }
+        }
+
+        .turn-o {
+            --primary-color: var(--secondary-color); /* Switch glow to O's color */
+        }
+    </style>
+</head>
+<body class="container-wrapper min-h-screen flex items-center justify-center p-4">
+
+    <!-- Main Game Container -->
+    <div class="w-full max-w-lg flex flex-col items-center space-y-8 p-6 md:p-10 rounded-xl shadow-2xl transition-all duration-300">
+
+        <!-- Header and Mode Toggle -->
+        <header class="w-full flex justify-between items-center">
+            <h1 class="text-4xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-violet-600 dark:from-teal-300 dark:to-violet-400">
+                XO AI
+            </h1>
+
+            <!-- Dark/Light Mode Toggle -->
+            <button id="theme-toggle" class="p-2 rounded-full hover:bg-slate-300 dark:hover:bg-gray-700 transition duration-150 focus:outline-none focus:ring-2 focus:ring-violet-500">
+                <!-- Moon Icon (Dark Mode) / Sun Icon (Light Mode) -->
+                <svg id="sun-icon" class="w-6 h-6 text-yellow-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                <svg id="moon-icon" class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+            </button>
+        </header>
+
+        <!-- Scoreboard -->
+        <div class="w-full flex justify-around items-center text-center p-4 rounded-xl shadow-inner bg-slate-200/50 dark:bg-gray-700/50">
+            <div class="flex flex-col items-center">
+                <span class="text-3xl font-extrabold text-teal-600 dark:text-teal-400" id="score-x">0</span>
+                <span class="text-sm font-semibold uppercase tracking-wider">Player (X)</span>
+            </div>
+            <div class="text-2xl font-black mx-4">|</div>
+            <div class="flex flex-col items-center">
+                <span class="text-3xl font-extrabold text-violet-600 dark:text-violet-400" id="score-o">0</span>
+                <span class="text-sm font-semibold uppercase tracking-wider">AI (O)</span>
+            </div>
+        </div>
+
+        <!-- Turn Indicator/Game Status -->
+        <div id="status-message" class="text-xl font-bold h-8">
+            <span id="turn-indicator" class="turn-indicator bg-teal-200/70 text-teal-800 dark:bg-teal-700/70 dark:text-teal-200">
+                X's Turn
+            </span>
+        </div>
+
+        <!-- Game Board -->
+        <div id="board" class="board rounded-xl">
+            <!-- Cells will be dynamically generated here -->
+        </div>
+
+        <!-- Controls -->
+        <div class="flex flex-col space-y-4 w-full">
+            <button id="play-again" class="py-3 px-6 text-lg font-bold rounded-full bg-violet-600 text-white hover:bg-violet-700 transition duration-200 transform hover:scale-[1.02] shadow-lg shadow-violet-500/50 dark:shadow-violet-400/30 focus:outline-none focus:ring-4 focus:ring-violet-500/50" disabled>
+                Play Again
+            </button>
+            <button id="reset-score" class="text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition duration-200">
+                Reset Score
+            </button>
+        </div>
+
+    </div>
+
+    <!-- Custom Modal for Alerts/Messages -->
+    <div id="game-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 transition-opacity duration-300 opacity-0" onclick="hideModal()">
+        <div class="bg-white dark:bg-gray-700 p-8 rounded-xl shadow-2xl text-center max-w-sm w-full transform scale-90 transition-transform duration-300" onclick="event.stopPropagation()">
+            <h3 id="modal-title" class="text-2xl font-extrabold mb-4 text-teal-600 dark:text-teal-400">Game Over!</h3>
+            <p id="modal-message" class="mb-6 text-gray-700 dark:text-gray-300">The winner is X!</p>
+            <button class="py-2 px-5 text-sm font-semibold rounded-full bg-violet-600 text-white hover:bg-violet-700 transition duration-200" onclick="hideModal()">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game State Variables ---
+        let board = ["", "", "", "", "", "", "", "", ""];
+        let currentPlayer = "X";
+        let isGameActive = true;
+        let scores = { X: 0, O: 0 };
+        let isDarkMode = false;
+        let isPlayerTurn = true; // Added for AI coordination
+
+        // --- DOM Elements ---
+        const boardElement = document.getElementById('board');
+        const statusElement = document.getElementById('turn-indicator');
+        const playAgainButton = document.getElementById('play-again');
+        const scoreXElement = document.getElementById('score-x');
+        const scoreOElement = document.getElementById('score-o');
+        const themeToggle = document.getElementById('theme-toggle');
+        const sunIcon = document.getElementById('sun-icon');
+        const moonIcon = document.getElementById('moon-icon');
+        const gameModal = document.getElementById('game-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+
+        // --- Sound Effects Setup (Tone.js) ---
+        // Synth for click sound
+        const clickSynth = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: "square" },
+            envelope: {
+                attack: 0.005,
+                decay: 0.1,
+                sustain: 0.05,
+                release: 0.1
+            }
+        }).toDestination();
+
+        // Synth for win sound (more complex, ascending notes)
+        const winSynth = new Tone.Synth({
+            oscillator: { type: "triangle" },
+            envelope: {
+                attack: 0.05,
+                decay: 0.5,
+                sustain: 0.01,
+                release: 1
+            }
+        }).toDestination();
+
+        // --- Win Conditions ---
+        const winningConditions = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+            [0, 4, 8], [2, 4, 6]             // Diagonals
+        ];
+
+        // --- Utility Functions ---
+
+        /** Displays a custom modal message. */
+        function showModal(title, message, colorClass = 'text-teal-600 dark:text-teal-400') {
+            modalTitle.textContent = title;
+            modalTitle.className = `text-2xl font-extrabold mb-4 ${colorClass}`;
+            modalMessage.textContent = message;
+            gameModal.classList.remove('hidden');
+            // Trigger transition effects
+            setTimeout(() => {
+                gameModal.style.opacity = '1';
+                gameModal.querySelector('div').style.transform = 'scale(1)';
+            }, 10);
+        }
+
+        /** Hides the custom modal. */
+        function hideModal() {
+            gameModal.style.opacity = '0';
+            gameModal.querySelector('div').style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                gameModal.classList.add('hidden');
+            }, 300);
+        }
+        window.hideModal = hideModal; // Make accessible globally for onclick
+
+        /** Plays a specific sound effect */
+        function playSound(type) {
+            Tone.start(); // Start audio context on first user interaction
+            if (type === 'click') {
+                clickSynth.triggerAttackRelease(currentPlayer === 'X' ? "C4" : "D4", "8n");
+            } else if (type === 'win') {
+                const now = Tone.now();
+                winSynth.triggerAttackRelease("G4", "8n", now);
+                winSynth.triggerAttackRelease("C5", "8n", now + 0.1);
+                winSynth.triggerAttackRelease("E5", "4n", now + 0.2);
+            }
+        }
+
+        /** Renders the current state of the board. */
+        function renderBoard() {
+            boardElement.innerHTML = '';
+            board.forEach((cellValue, index) => {
+                const cell = document.createElement('div');
+                cell.classList.add('cell', 'p-4', 'font-black', 'uppercase', 'select-none');
+                cell.setAttribute('data-index', index);
+                cell.addEventListener('click', handleCellClick);
+
+                if (cellValue) {
+                    cell.classList.add(cellValue.toLowerCase());
+                    cell.innerHTML = `<div>${cellValue}</div>`;
+                }
+                boardElement.appendChild(cell);
+            });
+        }
+
+        /** Updates the turn indicator message and style. */
+        function updateStatus(message, isEnd = false) {
+            statusElement.textContent = message;
+
+            // Remove existing turn classes
+            statusElement.classList.remove('bg-teal-200/70', 'text-teal-800', 'dark:bg-teal-700/70', 'dark:text-teal-200', 'bg-violet-200/70', 'text-violet-800', 'dark:bg-violet-700/70', 'dark:text-violet-200', 'turn-o');
+
+            if (isEnd) {
+                // Game over status
+                statusElement.classList.add('bg-gray-400/70', 'text-gray-900', 'dark:bg-gray-600/70', 'dark:text-gray-100');
+                statusElement.style.animation = 'none';
+            } else if (currentPlayer === "X") {
+                statusElement.classList.add('bg-teal-200/70', 'text-teal-800', 'dark:bg-teal-700/70', 'dark:text-teal-200');
+                statusElement.style.setProperty('--primary-color', isDarkMode ? '#2dd4bf' : '#0d9488');
+                statusElement.style.animation = 'glow-pulse 1.5s infinite alternate';
+            } else {
+                statusElement.classList.add('bg-violet-200/70', 'text-violet-800', 'dark:bg-violet-700/70', 'dark:text-violet-200', 'turn-o');
+                statusElement.style.setProperty('--primary-color', isDarkMode ? '#a78bfa' : '#7c3aed');
+                statusElement.style.animation = 'glow-pulse 1.5s infinite alternate';
+            }
+        }
+
+        /** Checks if the game has a winner or is a draw. */
+        function checkResult() {
+            let roundWon = false;
+            let winningCells = [];
+
+            for (let i = 0; i < winningConditions.length; i++) {
+                const condition = winningConditions[i];
+                let a = board[condition[0]];
+                let b = board[condition[1]];
+                let c = board[condition[2]];
+
+                if (a === "" || b === "" || c === "") {
+                    continue;
+                }
+                if (a === b && b === c) {
+                    roundWon = true;
+                    winningCells = condition;
+                    break;
+                }
+            }
+
+            if (roundWon) {
+                isGameActive = false;
+                playSound('win');
+                updateStatus(`Player ${currentPlayer} Wins!`, true);
+                scores[currentPlayer]++;
+                updateScoreboard();
+                playAgainButton.disabled = false;
+                highlightWinningCells(winningCells);
+                showModal('Game Over!', `Player ${currentPlayer} has won the round!`, currentPlayer === 'X' ? 'text-teal-600 dark:text-teal-400' : 'text-violet-600 dark:text-violet-400');
+                return true;
+            }
+
+            if (!board.includes("")) {
+                isGameActive = false;
+                updateStatus(`It's a Draw!`, true);
+                playAgainButton.disabled = false;
+                showModal('Game Over!', `The game ended in a draw.`);
+                return true;
+            }
+
+            return false;
+        }
+
+        /** Visually highlights the cells that caused the win. */
+        function highlightWinningCells(cells) {
+            cells.forEach(index => {
+                const cellElement = boardElement.querySelector(`[data-index='${index}']`);
+                if (cellElement) {
+                    cellElement.classList.add('win');
+                }
+            });
+        }
+
+        /** Switches the current player. */
+        function handlePlayerChange() {
+            currentPlayer = currentPlayer === "X" ? "O" : "X";
+            updateStatus(`${currentPlayer}'s Turn`);
+
+            // If the next player is AI (O), trigger AI move
+            if (currentPlayer === "O" && isGameActive) {
+                isPlayerTurn = false;
+                setTimeout(handleAIMove, 700); // 700ms delay for visual effect
+            } else {
+                isPlayerTurn = true;
+            }
+        }
+
+        /** Handles a user clicking a cell. */
+        function handleCellClick(e) {
+            const clickedCell = e.target.closest('.cell');
+            if (!clickedCell || !isGameActive || !isPlayerTurn) return;
+
+            const clickedCellIndex = parseInt(clickedCell.getAttribute('data-index'));
+
+            if (board[clickedCellIndex] !== "") return;
+
+            // Player Move (X)
+            board[clickedCellIndex] = currentPlayer;
+            clickedCell.classList.add('x');
+            clickedCell.innerHTML = `<div>X</div>`;
+            playSound('click');
+
+            if (!checkResult()) {
+                handlePlayerChange();
+            }
+        }
+
+        /** Updates the scoreboard display. */
+        function updateScoreboard() {
+            scoreXElement.textContent = scores.X;
+            scoreOElement.textContent = scores.O;
+        }
+
+        /** Resets the game to the initial state. */
+        function resetGame() {
+            board = ["", "", "", "", "", "", "", "", ""];
+            isGameActive = true;
+            currentPlayer = "X";
+            isPlayerTurn = true;
+            renderBoard();
+            updateStatus(`${currentPlayer}'s Turn`);
+            playAgainButton.disabled = true;
+        }
+
+        // --- AI (Minimax) Logic ---
+
+        /** Checks for an immediate win/loss state for the given board and player. */
+        function checkTerminal(boardState, player) {
+            for (const condition of winningConditions) {
+                const [a, b, c] = condition;
+                if (boardState[a] === player && boardState[b] === player && boardState[c] === player) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** Returns all available moves (indices) on the board. */
+        function getAvailableMoves(boardState) {
+            return boardState.map((val, index) => val === "" ? index : null).filter(val => val !== null);
+        }
+
+        /** Minimax implementation */
+        function minimax(newBoard, player) {
+            const availableSpots = getAvailableMoves(newBoard);
+
+            // Check for terminal states
+            if (checkTerminal(newBoard, 'X')) {
+                return { score: -10 }; // Player X wins (bad for AI)
+            } else if (checkTerminal(newBoard, 'O')) {
+                return { score: 10 };  // AI O wins (good for AI)
+            } else if (availableSpots.length === 0) {
+                return { score: 0 };  // Draw
+            }
+
+            const moves = [];
+
+            for (let i = 0; i < availableSpots.length; i++) {
+                const move = {};
+                move.index = availableSpots[i];
+                newBoard[availableSpots[i]] = player;
+
+                if (player === 'O') { // AI's turn (maximizing)
+                    const result = minimax(newBoard, 'X');
+                    move.score = result.score;
+                } else { // Player X's turn (minimizing)
+                    const result = minimax(newBoard, 'O');
+                    move.score = result.score;
+                }
+
+                // Clean up the board after checking the move
+                newBoard[availableSpots[i]] = "";
+                moves.push(move);
+            }
+
+            let bestMove;
+            if (player === 'O') {
+                let bestScore = -Infinity;
+                for (let i = 0; i < moves.length; i++) {
+                    if (moves[i].score > bestScore) {
+                        bestScore = moves[i].score;
+                        bestMove = i;
+                    }
+                }
+            } else {
+                let bestScore = Infinity;
+                for (let i = 0; i < moves.length; i++) {
+                    if (moves[i].score < bestScore) {
+                        bestScore = moves[i].score;
+                        bestMove = i;
+                    }
+                }
+            }
+
+            return moves[bestMove];
+        }
+
+        /** Finds the best move for the AI and executes it. */
+        function handleAIMove() {
+            if (!isGameActive) return;
+
+            // Find the best move using minimax
+            const move = minimax(board, 'O');
+            const moveIndex = move.index;
+
+            // Execute AI Move (O)
+            board[moveIndex] = 'O';
+            const cellElement = boardElement.querySelector(`[data-index='${moveIndex}']`);
+            if (cellElement) {
+                cellElement.classList.add('o');
+                cellElement.innerHTML = `<div>O</div>`;
+            }
+            playSound('click');
+
+            if (!checkResult()) {
+                handlePlayerChange();
+            }
+        }
+
+        // --- Dark/Light Mode Toggle Logic ---
+        function toggleTheme() {
+            isDarkMode = document.body.classList.toggle('dark');
+            localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+
+            // Update icon visibility
+            sunIcon.classList.toggle('hidden', isDarkMode);
+            moonIcon.classList.toggle('hidden', !isDarkMode);
+
+            // Re-apply status colors to ensure glow color updates
+            if (isGameActive) {
+                updateStatus(`${currentPlayer}'s Turn`);
+            } else {
+                 updateStatus(statusElement.textContent, true);
+            }
+        }
+
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.body.classList.add('dark');
+                isDarkMode = true;
+                sunIcon.classList.remove('hidden');
+                moonIcon.classList.add('hidden');
+            } else {
+                sunIcon.classList.add('hidden');
+                moonIcon.classList.remove('hidden');
+            }
+        }
+
+        // --- Event Listeners and Initialization ---
+
+        window.onFirebaseReady = () => {
+             console.log("Game setup starting after Firebase check.");
+             // Game initialization logic (runs after Firebase check completes)
+             loadTheme();
+             renderBoard();
+             updateStatus(`${currentPlayer}'s Turn`);
+             updateScoreboard();
+
+             // Add main event listeners
+             playAgainButton.addEventListener('click', resetGame);
+             document.getElementById('reset-score').addEventListener('click', () => {
+                 scores = { X: 0, O: 0 };
+                 updateScoreboard();
+             });
+             themeToggle.addEventListener('click', toggleTheme);
+        };
+
+        // If Firebase wasn't configured, run initialization immediately
+        if (window.isAuthReady) {
+            window.onFirebaseReady();
+        }
+
+    </script>
+</body>
+</html>
