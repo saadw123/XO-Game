@@ -240,6 +240,18 @@
             </div>
         </div>
 
+        <!-- Difficulty Selector -->
+        <div class="w-full flex flex-col items-center space-y-3 p-3 rounded-xl bg-slate-100 dark:bg-gray-800 shadow-inner">
+            <label for="difficulty-select" class="text-sm font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                اختَر مستوى الصعوبة
+            </label>
+            <select id="difficulty-select" class="p-2 rounded-lg border-2 border-violet-500 bg-white dark:bg-gray-600 dark:text-white font-bold cursor-pointer focus:ring-violet-500 focus:border-violet-500 transition duration-150">
+                <option value="easy">سهل</option>
+                <option value="medium">متوسط</option>
+                <option value="hard" selected>صعب</option>
+            </select>
+        </div>
+
         <!-- Turn Indicator/Game Status -->
         <div id="status-message" class="text-xl font-bold h-8">
             <span id="turn-indicator" class="turn-indicator bg-teal-200/70 text-teal-800 dark:bg-teal-700/70 dark:text-teal-200">
@@ -283,6 +295,7 @@
         let scores = { X: 0, O: 0 };
         let isDarkMode = false;
         let isPlayerTurn = true; // Added for AI coordination
+        let currentDifficulty = "hard"; // New: default to hard
 
         // --- DOM Elements ---
         const boardElement = document.getElementById('board');
@@ -296,6 +309,7 @@
         const gameModal = document.getElementById('game-modal');
         const modalTitle = document.getElementById('modal-title');
         const modalMessage = document.getElementById('modal-message');
+        const difficultySelect = document.getElementById('difficulty-select'); // New DOM element
 
         // --- Sound Effects Setup (Tone.js) ---
         // Synth for click sound
@@ -582,25 +596,74 @@
             return moves[bestMove];
         }
 
-        /** Finds the best move for the AI and executes it. */
+        // --- New AI Difficulty Logic ---
+
+        /** Returns a random valid move index. */
+        function getRandomMove(boardState) {
+            const available = getAvailableMoves(boardState);
+            if (available.length === 0) return -1;
+            return available[Math.floor(Math.random() * available.length)];
+        }
+
+        /** Determines the AI's move based on the current difficulty level. */
+        function getAIMove(boardState, difficulty) {
+            let moveIndex;
+
+            switch (difficulty) {
+                case 'easy':
+                    // Easy: Always make a random move
+                    moveIndex = getRandomMove(boardState);
+                    break;
+
+                case 'medium':
+                    // Medium: 80% chance of a smart (Minimax) move, 20% chance of a random move.
+                    if (Math.random() < 0.8) {
+                        // Minimax move
+                        moveIndex = minimax(boardState, 'O').index;
+                    } else {
+                        // Random move
+                        moveIndex = getRandomMove(boardState);
+                    }
+                    break;
+
+                case 'hard':
+                default:
+                    // Hard: Always use Minimax for perfect play
+                    const bestMove = minimax(boardState, 'O');
+                    moveIndex = bestMove ? bestMove.index : getRandomMove(boardState);
+                    break;
+            }
+
+            if (moveIndex === undefined || moveIndex === -1 || boardState[moveIndex] !== "") {
+                // Fallback to a random move if the preferred move is invalid or not found
+                 return getRandomMove(boardState);
+            }
+
+            return moveIndex;
+        }
+
+
+        /** Finds the best move for the AI and executes it. (Refactored to use getAIMove) */
         function handleAIMove() {
             if (!isGameActive) return;
 
-            // Find the best move using minimax
-            const move = minimax(board, 'O');
-            const moveIndex = move.index;
+            // Use the difficulty setting to determine the move
+            const moveIndex = getAIMove(board, currentDifficulty);
 
-            // Execute AI Move (O)
-            board[moveIndex] = 'O';
-            const cellElement = boardElement.querySelector(`[data-index='${moveIndex}']`);
-            if (cellElement) {
-                cellElement.classList.add('o');
-                cellElement.innerHTML = `<div>O</div>`;
-            }
-            playSound('click');
+            // If a valid move is found
+            if (moveIndex !== -1 && board[moveIndex] === "") {
+                // Execute AI Move (O)
+                board[moveIndex] = 'O';
+                const cellElement = boardElement.querySelector(`[data-index='${moveIndex}']`);
+                if (cellElement) {
+                    cellElement.classList.add('o');
+                    cellElement.innerHTML = `<div>O</div>`;
+                }
+                playSound('click');
 
-            if (!checkResult()) {
-                handlePlayerChange();
+                if (!checkResult()) {
+                    handlePlayerChange();
+                }
             }
         }
 
@@ -644,6 +707,9 @@
              updateStatus(`${currentPlayer}'s Turn`);
              updateScoreboard();
 
+             // Set initial difficulty
+             currentDifficulty = difficultySelect.value;
+
              // Add main event listeners
              playAgainButton.addEventListener('click', resetGame);
              document.getElementById('reset-score').addEventListener('click', () => {
@@ -651,6 +717,13 @@
                  updateScoreboard();
              });
              themeToggle.addEventListener('click', toggleTheme);
+
+             // New event listener for difficulty change
+             difficultySelect.addEventListener('change', (e) => {
+                 currentDifficulty = e.target.value;
+                 // Automatically reset game when difficulty changes for a fresh start
+                 resetGame();
+             });
         };
 
         // If Firebase wasn't configured, run initialization immediately
